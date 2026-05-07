@@ -38,6 +38,17 @@ st.title("☀️ Painel Didático dos Sensores")
 st.caption("Visualização dos sensores J8, J11 e J9 em Lux, W/m² e W/m² calibrado")
 
 # ============================================================
+# FUNÇÕES AUXILIARES
+# ============================================================
+@st.cache_data
+def carregar_dados_excel(fonte):
+    return pd.read_excel(fonte, sheet_name="Sheet1")
+
+def validar_colunas(df, colunas_necessarias):
+    faltantes = [c for c in colunas_necessarias if c not in df.columns]
+    return faltantes
+
+# ============================================================
 # ENTRADA DO ARQUIVO
 # ============================================================
 st.sidebar.header("Configurações")
@@ -48,13 +59,7 @@ uploaded_file = st.sidebar.file_uploader(
 )
 
 usar_arquivo_local = st.sidebar.checkbox("Usar caminho local fixo", value=False)
-
 caminho_local = r"/mnt/data/DadosConsolidadosLUX3sensores_Wm2_calibrado.xlsx"
-
-@st.cache_data
-def carregar_dados_excel(fonte):
-    df = pd.read_excel(fonte, sheet_name="Sheet1")
-    return df
 
 if uploaded_file is not None:
     df = carregar_dados_excel(uploaded_file)
@@ -67,10 +72,24 @@ else:
 # ============================================================
 # PREPARAÇÃO DOS DADOS
 # ============================================================
+colunas_esperadas = [
+    "timestamp",
+    "J8_lux", "J11_lux", "J9_lux",
+    "batt_V",
+    "J8_Wm2", "J11_Wm2", "J9_Wm2",
+    "interval_duration_hours",
+    "J8_Wm2_calibrado", "J11_Wm2_calibrado", "J9_Wm2_calibrado"
+]
+
+faltantes = validar_colunas(df, colunas_esperadas)
+if faltantes:
+    st.error("O arquivo não contém todas as colunas esperadas.")
+    st.write("Colunas faltantes:", faltantes)
+    st.stop()
+
 df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
 df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
-# garante numérico
 colunas_numericas = [
     "J8_lux", "J11_lux", "J9_lux",
     "batt_V",
@@ -81,6 +100,14 @@ colunas_numericas = [
 
 for c in colunas_numericas:
     df[c] = pd.to_numeric(df[c], errors="coerce")
+
+# Se interval_duration_hours vier vazio, tenta reconstruir
+if df["interval_duration_hours"].isna().all():
+    df["next_timestamp"] = df["timestamp"].shift(-1)
+    df["interval_duration_hours"] = (
+        (df["next_timestamp"] - df["timestamp"]).dt.total_seconds() / 3600.0
+    )
+    df["interval_duration_hours"] = df["interval_duration_hours"].fillna(0)
 
 df["data"] = df["timestamp"].dt.date
 df["hora"] = df["timestamp"].dt.hour
@@ -117,8 +144,6 @@ grandeza = st.sidebar.radio(
     index=2
 )
 
-escala_log = st.sidebar.checkbox("Escala logarítmica", value=False)
-
 limiar = st.sidebar.number_input(
     "Limiar para brilho solar (W/m²)",
     min_value=0.0,
@@ -126,7 +151,6 @@ limiar = st.sidebar.number_input(
     step=1.0
 )
 
-# filtro temporal
 mask = (df["timestamp"].dt.date >= data_ini) & (df["timestamp"].dt.date <= data_fim)
 df_f = df.loc[mask].copy()
 
@@ -173,9 +197,10 @@ cols = st.columns(len(sensores_escolhidos) + 1)
 for i, sensor in enumerate(sensores_escolhidos):
     col = mapa_ativo[sensor]
     serie = df_f[col].dropna()
+
     if len(serie) > 0:
         ultimo = serie.iloc[-1]
-        delta = ultimo - serie.iloc[-2] if len(serie) > 1 else np.nan
+        delta = serie.iloc[-1] - serie.iloc[-2] if len(serie) > 1 else np.nan
         cols[i].metric(
             label=f"{sensor} ({y_label})",
             value=f"{ultimo:.2f}",
@@ -187,7 +212,7 @@ for i, sensor in enumerate(sensores_escolhidos):
 bat = df_f["batt_V"].dropna()
 if len(bat) > 0:
     ultimo_bat = bat.iloc[-1]
-    delta_bat = ultimo_bat - bat.iloc[-2] if len(bat) > 1 else np.nan
+    delta_bat = bat.iloc[-1] - bat.iloc[-2] if len(bat) > 1 else np.nan
     cols[-1].metric(
         label="Bateria (V)",
         value=f"{ultimo_bat:.3f}",
@@ -241,36 +266,48 @@ with aba1:
         yaxis_title=y_label
     )
 
-    if escala_log:
-        fig.update_yaxes(type="log")
-
     st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
-# ABA 2 - RESUMO DIÁRIO
+# ABA 2 - COMPARAÇÃO DIÁRIA
 # ============================================================
 with aba2:
     st.subheader(f"Comparação diária - {grandeza}")
 
     registros = []
+
     for sensor in sensores_escolhidos:
         col = mapa_ativo[sensor]
-        temp = df_f.groupby("data", as_index=False)[col].agg(["mean", "max", "min"]).reset_index()
-        temp.columns = ["data", "media", "maximo", "minimo"]
+
+        temp = (
+            df_f.groupby("data")
+                .agg(
+                    media=(col, "mean"),
+                    maximo=(col, "max"),
+                    minimo=(col, "min")
+                )
+                .reset_index()
+        )
+
         temp["sensor"] = sensor
         registros.append(temp)
 
     df_daily = pd.concat(registros, ignore_index=True)
 
-    fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                         subplot_titles=("Média diária", "Máximo diário"))
+    fig2 = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=("Média diária", "Máximo diário")
+    )
 
     for sensor in sensores_escolhidos:
         d = df_daily[df_daily["sensor"] == sensor]
 
         fig2.add_trace(
             go.Scatter(
-                x=d["data"], y=d["media"],
+                x=d["data"],
+                y=d["media"],
                 mode="lines+markers",
                 name=f"{sensor} média"
             ),
@@ -279,7 +316,8 @@ with aba2:
 
         fig2.add_trace(
             go.Scatter(
-                x=d["data"], y=d["maximo"],
+                x=d["data"],
+                y=d["maximo"],
                 mode="lines+markers",
                 name=f"{sensor} máximo"
             ),
@@ -304,7 +342,7 @@ with aba2:
 # ============================================================
 with aba3:
     st.subheader(f"Horas diárias acima de {limiar:.0f} W/m²")
-    st.caption("Cálculo feito com base em 'interval_duration_hours', o que é melhor do que assumir passo fixo.")
+    st.caption("Cálculo feito com base em interval_duration_hours.")
 
     registros_horas = []
 
@@ -387,7 +425,6 @@ with aba5:
     ]
 
     tabela = df_f[colunas_tabela].copy()
-
     st.dataframe(tabela, use_container_width=True)
 
     csv = tabela.to_csv(index=False).encode("utf-8")
