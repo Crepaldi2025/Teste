@@ -1,4 +1,4 @@
-# Autenticação do Google Earth Engine para Aplicações Streamlit
+Autenticação do Google Earth Engine para Aplicações Streamlit
 
 Este repositório contém uma aplicação desenvolvida em **Streamlit** com integração ao **Google Earth Engine**, utilizando autenticação por **conta de serviço** associada a um projeto do **Google Cloud**.
 
@@ -6,7 +6,7 @@ O objetivo principal é disponibilizar uma estrutura básica, segura e reprodut�
 
 ---
 
-## Objetivo
+Objetivo
 
 O projeto tem como finalidade demonstrar e organizar o processo de autenticação entre uma aplicação Streamlit e os serviços do Google Earth Engine, utilizando:
 
@@ -19,7 +19,7 @@ O projeto tem como finalidade demonstrar e organizar o processo de autenticaçã
 
 ---
 
-## Estrutura básica do projeto
+Estrutura básica do projeto
 
 A estrutura mínima recomendada para o projeto é:
 
